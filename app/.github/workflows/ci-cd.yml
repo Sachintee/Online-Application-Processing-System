@@ -1,0 +1,81 @@
+name: OAPS Docker CI-CD Pipeline
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build-test-deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      POSTGRES_DB: oapsdb
+      POSTGRES_USER: oapsuser
+      POSTGRES_PASSWORD: testpassword
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: oapsdb
+      DB_USER: oapsuser
+      DB_PASSWORD: testpassword
+
+    steps:
+      # 1. Get source code
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # 2. Check Python syntax
+      - name: Python Syntax Check
+        run: |
+          python -m py_compile app.py
+
+      # 3. Validate Docker Compose configuration
+      - name: Validate Compose Configuration
+        run: |
+          docker compose config --quiet
+
+      # 4. Build Docker image
+      - name: Build Docker Image
+        run: |
+          docker build \
+            -t oaps-app:${GITHUB_SHA} \
+            -t oaps-app:test .
+
+      # 5. Tag the image for Compose deployment
+      - name: Tag Docker Image
+        run: |
+          docker tag oaps-app:${GITHUB_SHA} oaps-app:local
+          docker images oaps-app
+
+      # 6. Deploy to test environment
+      - name: Deploy Test Environment
+        run: |
+          docker compose up -d --no-build
+          docker compose ps
+
+      # 7. Automated application health check
+      - name: Test Application
+        run: |
+          for i in {1..30}; do
+            if curl -fsS http://localhost:8081/ -o response.json; then
+              break
+            fi
+            sleep 2
+          done
+
+          cat response.json
+
+          python -c "import json; d=json.load(open('response.json')); assert d['status']=='running'; assert d['service']=='Online Application Processing System'; print('APPLICATION TEST PASSED')"
+
+      # 8. Display deployment result
+      - name: Deployment Verification
+        run: |
+          docker compose ps
+          docker image inspect oaps-app:${GITHUB_SHA}
+
+      # 9. Stop test containers
+      - name: Cleanup Test Environment
+        if: always()
+        run: |
+          docker compose down -v
